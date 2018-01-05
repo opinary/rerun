@@ -5,17 +5,21 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/howeyc/fsnotify"
 	"go/build"
+	"io"
 	"log"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strings"
+
+	"github.com/howeyc/fsnotify"
 )
 
 var (
@@ -23,6 +27,7 @@ var (
 	do_build      = flag.Bool("build", false, "Build program")
 	never_run     = flag.Bool("no-run", false, "Do not run")
 	race_detector = flag.Bool("race", false, "Run program and tests with the race detector")
+	cloudconf     = flag.String("conf", "", "Path to Google Cloud YAML configuration file")
 )
 
 func install(buildpath, lastError string) (installed bool, errorOutput string, err error) {
@@ -54,6 +59,62 @@ func install(buildpath, lastError string) (installed bool, errorOutput string, e
 	// all seems fine
 	installed = true
 	return
+}
+
+func loadEnv(confpath string) ([]string, error) {
+	var envconf []string
+
+	fd, err := os.Open(confpath)
+	if err != nil {
+		return nil, err
+	}
+	defer fd.Close()
+
+	// poor man's YAML parser
+	envscope := false
+	rd := bufio.NewReader(fd)
+	for lineNo := 1; ; lineNo++ {
+		line, err := rd.ReadString('\n')
+		switch err {
+		case nil:
+			// all good
+		case io.EOF:
+			return envconf, nil
+		default:
+			return nil, fmt.Errorf("cannot read: %s", err)
+		}
+
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		if strings.TrimSpace(line) == "env_variables:" {
+			envscope = true
+			continue
+		}
+		if !envscope {
+			continue
+		}
+
+		if line[0] != ' ' && line[0] != '\t' {
+			// out of section scope
+			envscope = false
+		}
+
+		// no support for multiline values
+
+		chunks := strings.SplitN(line, ":", 2)
+		if len(chunks) != 2 {
+			fmt.Fprintf(os.Stderr, "ignoring invalid configuration at line %d\n%s\n", lineNo, line)
+			continue
+		}
+
+		key := strings.TrimSpace(chunks[0])
+		value := strings.TrimSpace(chunks[1])
+		envconf = append(envconf, key+"="+value)
+
+		log.Print("environment configuration found " + key)
+	}
 }
 
 func test(buildpath string) (passed bool, err error) {
@@ -108,7 +169,7 @@ func gobuild(buildpath string) (passed bool, err error) {
 	return
 }
 
-func run(binName, binPath string, args []string) (runch chan bool) {
+func run(binName, binPath string, env []string, args []string) (runch chan bool) {
 	runch = make(chan bool)
 	go func() {
 		cmdline := append([]string{binName}, args...)
@@ -128,6 +189,7 @@ func run(binName, binPath string, args []string) (runch chan bool) {
 			cmd := exec.Command(binPath, args...)
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
+			cmd.Env = append(cmd.Env, env...)
 			log.Print(cmdline)
 			err := cmd.Start()
 			if err != nil {
@@ -165,6 +227,16 @@ func addToWatcher(watcher *fsnotify.Watcher, importpath string, watching map[str
 func rerun(buildpath string, args []string) (err error) {
 	log.Printf("setting up %s %v", buildpath, args)
 
+	var envconf []string
+	if *cloudconf != "" {
+		var err error
+		envconf, err = loadEnv(*cloudconf)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cannot load environment from YAML file: %s\n", err)
+			os.Exit(1)
+		}
+	}
+
 	pkg, err := build.Import(buildpath, "", 0)
 	if err != nil {
 		return
@@ -185,7 +257,7 @@ func rerun(buildpath string, args []string) (err error) {
 
 	var runch chan bool
 	if !(*never_run) {
-		runch = run(binName, binPath, args)
+		runch = run(binName, binPath, envconf, args)
 	}
 
 	no_run := false
@@ -268,7 +340,6 @@ func rerun(buildpath string, args []string) (err error) {
 			runch <- true
 		}
 	}
-	return
 }
 
 func main() {

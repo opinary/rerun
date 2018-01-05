@@ -1,3 +1,17 @@
+This is modified version of https://github.com/skelterjohn/rerun project.
+
+In addition to base functionality, google cloud application YAML file can be specified. When provided, environment variables are load from it.
+
+Example:
+
+    rerun \
+        -conf github.com/opinary/app/foobar/staging.yaml \
+        github.com/opinary/app/foobar
+
+`-conf` flag MUST BE provided BEFORE project path to be used by `rerun` and not passed through as project's execution parameter.
+
+---
+
 Use like ```rerun github.com/skelterjohn/go.uik/uiktest```
 
 Usage: ```rerun [--test] [--build] [--race] [--no-run] <import path> [arg]*```
