@@ -236,6 +236,7 @@ func rerun(buildpath string, args []string) (err error) {
 			os.Exit(1)
 		}
 	}
+	envconf = append(envconf, os.Environ()...)
 
 	pkg, err := build.Import(buildpath, "", 0)
 	if err != nil {
